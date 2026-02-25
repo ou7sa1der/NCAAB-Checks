@@ -211,7 +211,9 @@ const TEAM_ALIASES_COMMON = new Map([
 
   ["murray st", "murray state"],
   ["murray st.", "murray state"],
-
+  ["oregon st", "oregon state"],
+  ["oregon st.", "oregon state"],
+  
   ["idaho st", "idaho state"],
   ["idaho st.", "idaho state"],
   ["weber st", "weber state"],
@@ -1056,4 +1058,5 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   compareAndRender();
+
 });
