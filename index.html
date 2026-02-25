@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>NCAAB Schedule Compare</title>
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+
+  <h2>NCAAB Schedule Compare Tool</h2>
+
+  <div class="controls">
+    <label>
+      Date:
+      <input type="date" id="datePicker" />
+    </label>
+
+    <button id="fetchEspnBtn" class="btn-primary">Fetch ESPN</button>
+
+    <a href="https://www.espn.com/mens-college-basketball/schedule"
+       target="_blank"
+       rel="noopener"
+       class="btn-link">
+       Open ESPN
+    </a>
+
+    <label class="chk">
+      <input type="checkbox" id="strictMode" />
+      Strict mode (no fuzzy)
+    </label>
+
+    <label class="chk">
+      <input type="checkbox" id="limitEspnToCount" />
+      Limit ESPN to N / Other count
+    </label>
+
+    <label class="chk">
+      <input type="checkbox" id="showOnlyMismatches" />
+      Show only mismatches
+    </label>
+
+    <label>
+      View:
+      <select id="mismatchView" style="height: 32px;">
+        <option value="all">All</option>
+        <option value="matches">Matches only</option>
+        <option value="mismatches">Only mismatches</option>
+        <option value="espnMissing">ESPN missing (no match)</option>
+        <option value="otherMissing">Other leftover (not in ESPN)</option>
+      </select>
+    </label>
+
+    <div class="legend" aria-label="Legend">
+      <span class="tag tag-match">Matched</span>
+      <span class="tag tag-miss">Missing</span>
+      <span class="tag tag-warn">Other leftover</span>
+
+      <span class="tag tag-home">H Home venue</span>
+      <span class="tag tag-neutral">N Not home</span>
+      <span class="tag tag-unknown">? Unknown</span>
+    </div>
+
+    <label>
+      N:
+      <input
+        type="number"
+        id="limitCount"
+        min="1"
+        step="1"
+        placeholder="(blank = Other count)"
+        style="width: 180px;"
+      />
+    </label>
+
+    <label class="chk">
+      <input type="checkbox" id="hideUnmatchedEspn" />
+      Hide ESPN not-created
+    </label>
+
+    <button id="copyMismatchesBtn" class="btn-primary">
+      Copy mismatches
+    </button>
+
+    <span id="status"></span>
+  </div>
+
+  <div class="summary">
+    <div><b>Summary</b></div>
+    <div id="summaryText">Fetch ESPN to start.</div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <h3>ESPN</h3>
+      <textarea id="espnInput"></textarea>
+      <div id="espnOutput" class="output"></div>
+    </div>
+
+    <div>
+      <h3>Other App</h3>
+      <textarea id="otherInput"></textarea>
+      <div id="otherOutput" class="output"></div>
+    </div>
+  </div>
+
+  <h3>Aligned Comparison</h3>
+  <div id="alignedOutput" class="aligned"></div>
+
+  <div class="errorsGrid">
+    <div>
+      <h3>Parse Errors</h3>
+      <pre id="parseErrorsOutput"></pre>
+    </div>
+    <div>
+      <h3>Resolve Errors</h3>
+      <pre id="resolveErrorsOutput"></pre>
+    </div>
+  </div>
+
+  <script src="compare.js"></script>
+</body>
+</html>
