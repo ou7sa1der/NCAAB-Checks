@@ -213,7 +213,7 @@ const TEAM_ALIASES_COMMON = new Map([
   ["murray st.", "murray state"],
   ["oregon st", "oregon state"],
   ["oregon st.", "oregon state"],
-  
+
   ["idaho st", "idaho state"],
   ["idaho st.", "idaho state"],
   ["weber st", "weber state"],
@@ -452,17 +452,16 @@ function similarity(a, b) {
 }
 
 // --------------------------
-// TEAM INDEX FROM ESPN
+// TEAM INDEX FROM ESPN (with State flag per teamId)
 // --------------------------
 function buildTeamIndexFromEspnGames(espnGames) {
   const abbrToId = new Map();
   const nameToId = new Map();
-  const idHasState = new Map(); // teamId -> boolean (based on ESPN displayName)
+  const idHasState = new Map(); // teamId -> boolean (based on ESPN display name)
 
   function markStateFlag(teamId, displayName) {
     if (!teamId) return;
     const nm = cleanTeamName(displayName || "");
-    // Only the literal word "state" counts here (not "st" because of Saint teams)
     const hasState = /\bstate\b/.test(nm);
     if (!idHasState.has(teamId)) idHasState.set(teamId, hasState);
     else idHasState.set(teamId, idHasState.get(teamId) || hasState);
@@ -478,7 +477,6 @@ function buildTeamIndexFromEspnGames(espnGames) {
       nameToId.set(cleanTeamName(g.away), id);
       markStateFlag(id, g.away);
     }
-
     if (g.homeId) {
       const id = g.homeId;
       if (g.homeAbbr) {
@@ -497,49 +495,42 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
   if (!teamIndex) return null;
   const raw = stripLeadingJunk(teamText);
 
+  // Abbreviation (exact)
   const acronym = raw.replace(/[^A-Za-z]/g, "");
   if (acronym.length >= 2 && acronym.length <= 6) {
     const id = teamIndex.abbrToId.get(acronym.toLowerCase());
     if (id) return id;
   }
 
+  // Name (exact)
   const cleaned = cleanTeamName(raw);
   const exact = teamIndex.nameToId.get(cleaned);
   if (exact) return exact;
 
   if (strictMode) return null;
 
+  // Fuzzy
   let bestId = null;
   let bestScore = 0;
-    // --- Prevent fuzzy matching from mapping non-State -> State teams ---
-  const cleanedHasState = /\bstate\b/.test(cleaned);
-
-  if (!cleanedHasState && bestId) {
-    const bestIsStateTeam = !!teamIndex.idHasState?.get(bestId);
-    if (bestIsStateTeam) return null; // force mismatch
-  }
-
-  return bestScore >= 0.72 ? bestId : null;
-  }
-    // --- Prevent "State" being ignored by fuzzy matching ---
-  const cleanedHasState = /\bstate\b/.test(cleaned);
-
-  // If input doesn't contain "state", do NOT allow fuzzy to match to a team that DOES contain "state"
-  // This avoids: "North Dakota" -> "North Dakota State", "Michigan" -> "Michigan State", etc.
-  if (!cleanedHasState && bestId) {
-    // Find the chosen name for bestId (we need to know if the winning ESPN name contains "state")
-    // We can detect it by scanning knownName -> id mapping once more:
-    for (const [knownName, id] of teamIndex.nameToId.entries()) {
-      if (id === bestId) {
-        if (/\bstate\b/.test(knownName)) {
-          return null; // force mismatch
-        }
-        break;
-      }
+  for (const [knownName, id] of teamIndex.nameToId.entries()) {
+    const score = similarity(cleaned, knownName);
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
     }
   }
 
-  return bestScore >= 0.72 ? bestId : null;
+  // --- Critical rule: do NOT allow fuzzy "non-state" -> "state teamId" ---
+  // This prevents: "North Dakota" matching "North Dakota State" etc.
+  if (bestId && bestScore >= 0.72) {
+    const cleanedHasState = /\bstate\b/.test(cleaned);
+    if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) {
+      return null;
+    }
+    return bestId;
+  }
+
+  return null;
 }
 
 // --------------------------
@@ -1094,6 +1085,4 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   compareAndRender();
-
 });
-
