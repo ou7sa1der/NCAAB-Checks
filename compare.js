@@ -457,24 +457,40 @@ function similarity(a, b) {
 function buildTeamIndexFromEspnGames(espnGames) {
   const abbrToId = new Map();
   const nameToId = new Map();
+  const idHasState = new Map(); // teamId -> boolean (based on ESPN displayName)
+
+  function markStateFlag(teamId, displayName) {
+    if (!teamId) return;
+    const nm = cleanTeamName(displayName || "");
+    // Only the literal word "state" counts here (not "st" because of Saint teams)
+    const hasState = /\bstate\b/.test(nm);
+    if (!idHasState.has(teamId)) idHasState.set(teamId, hasState);
+    else idHasState.set(teamId, idHasState.get(teamId) || hasState);
+  }
 
   for (const g of espnGames) {
     if (g.awayId) {
+      const id = g.awayId;
       if (g.awayAbbr) {
-        abbrToId.set(g.awayAbbr.toLowerCase(), g.awayId);
-        nameToId.set(cleanTeamName(g.awayAbbr), g.awayId);
+        abbrToId.set(g.awayAbbr.toLowerCase(), id);
+        nameToId.set(cleanTeamName(g.awayAbbr), id);
       }
-      nameToId.set(cleanTeamName(g.away), g.awayId);
+      nameToId.set(cleanTeamName(g.away), id);
+      markStateFlag(id, g.away);
     }
+
     if (g.homeId) {
+      const id = g.homeId;
       if (g.homeAbbr) {
-        abbrToId.set(g.homeAbbr.toLowerCase(), g.homeId);
-        nameToId.set(cleanTeamName(g.homeAbbr), g.homeId);
+        abbrToId.set(g.homeAbbr.toLowerCase(), id);
+        nameToId.set(cleanTeamName(g.homeAbbr), id);
       }
-      nameToId.set(cleanTeamName(g.home), g.homeId);
+      nameToId.set(cleanTeamName(g.home), id);
+      markStateFlag(id, g.home);
     }
   }
-  return { abbrToId, nameToId };
+
+  return { abbrToId, nameToId, idHasState };
 }
 
 function resolveTeamToId(teamText, teamIndex, strictMode) {
@@ -495,12 +511,15 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
 
   let bestId = null;
   let bestScore = 0;
-  for (const [knownName, id] of teamIndex.nameToId.entries()) {
-    const score = similarity(cleaned, knownName);
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = id;
-    }
+    // --- Prevent fuzzy matching from mapping non-State -> State teams ---
+  const cleanedHasState = /\bstate\b/.test(cleaned);
+
+  if (!cleanedHasState && bestId) {
+    const bestIsStateTeam = !!teamIndex.idHasState?.get(bestId);
+    if (bestIsStateTeam) return null; // force mismatch
+  }
+
+  return bestScore >= 0.72 ? bestId : null;
   }
     // --- Prevent "State" being ignored by fuzzy matching ---
   const cleanedHasState = /\bstate\b/.test(cleaned);
@@ -1077,3 +1096,4 @@ document.addEventListener("DOMContentLoaded", () => {
   compareAndRender();
 
 });
+
