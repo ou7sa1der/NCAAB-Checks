@@ -191,21 +191,6 @@ const TEAM_ALIASES_COMMON = new Map([
   ["detroit u.", "detroit mercy"],
   ["detroit mercy", "detroit mercy"],
 
-  ["michigan st", "michigan state"],
-  ["michigan st.", "michigan state"],
-
-  ["north dakota st", "north dakota state"],
-  ["north dakota st.", "north dakota state"],
-
-  ["south dakota st", "south dakota state"],
-  ["south dakota st.", "south dakota state"],
-
-  ["tennessee st", "tennessee state"],
-  ["tennessee st.", "tennessee state"],
-
-  ["sacramento st", "sacramento state"],
-  ["sacramento st.", "sacramento state"],
-  
   ["cal irvine", "uc irvine"],
   ["cal san diego", "uc san diego"],
   ["cal riverside", "uc riverside"],
@@ -496,7 +481,6 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
   if (!teamIndex) return null;
   const raw = stripLeadingJunk(teamText);
 
-  // Try abbreviation lookup even if not fully uppercase (UConn, UtSa, etc.)
   const acronym = raw.replace(/[^A-Za-z]/g, "");
   if (acronym.length >= 2 && acronym.length <= 6) {
     const id = teamIndex.abbrToId.get(acronym.toLowerCase());
@@ -504,38 +488,11 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
   }
 
   const cleaned = cleanTeamName(raw);
-
-  // 1) exact cleaned-name match
   const exact = teamIndex.nameToId.get(cleaned);
   if (exact) return exact;
 
-  // 2) SMART inference: if Other App drops trailing "state"
-  // Only accept if it produces exactly ONE valid ESPN team for this date.
-  // Example: "sacramento" -> "sacramento state"
-  {
-    const candidates = [];
-
-    const tryNames = [
-      `${cleaned} state`,
-      `${cleaned} st`,
-      `${cleaned} st.`,
-    ];
-
-    for (const name of tryNames) {
-      const key = cleanTeamName(name);
-      const id = teamIndex.nameToId.get(key);
-      if (id) candidates.push(id);
-    }
-
-    // If unique candidate found -> safe to use
-    const unique = [...new Set(candidates)];
-    if (unique.length === 1) return unique[0];
-  }
-
-  // 3) If strict mode, stop here (no fuzzy)
   if (strictMode) return null;
 
-  // 4) fuzzy (existing)
   let bestId = null;
   let bestScore = 0;
   for (const [knownName, id] of teamIndex.nameToId.entries()) {
@@ -1103,4 +1060,3 @@ document.addEventListener("DOMContentLoaded", () => {
   compareAndRender();
 
 });
-
