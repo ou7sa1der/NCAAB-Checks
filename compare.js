@@ -502,6 +502,23 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
       bestId = id;
     }
   }
+    // --- Prevent "State" being ignored by fuzzy matching ---
+  const cleanedHasState = /\bstate\b/.test(cleaned);
+
+  // If input doesn't contain "state", do NOT allow fuzzy to match to a team that DOES contain "state"
+  // This avoids: "North Dakota" -> "North Dakota State", "Michigan" -> "Michigan State", etc.
+  if (!cleanedHasState && bestId) {
+    // Find the chosen name for bestId (we need to know if the winning ESPN name contains "state")
+    // We can detect it by scanning knownName -> id mapping once more:
+    for (const [knownName, id] of teamIndex.nameToId.entries()) {
+      if (id === bestId) {
+        if (/\bstate\b/.test(knownName)) {
+          return null; // force mismatch
+        }
+        break;
+      }
+    }
+  }
 
   return bestScore >= 0.72 ? bestId : null;
 }
