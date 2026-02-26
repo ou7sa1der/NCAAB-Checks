@@ -462,7 +462,8 @@ function buildTeamIndexFromEspnGames(espnGames) {
   function markStateFlag(teamId, displayName) {
     if (!teamId) return;
     const nm = cleanTeamName(displayName || "");
-    const hasState = /\bstate\b/.test(nm);
+    // ESPN often uses "... St." instead of "... State"
+    const hasState = /\bstate\b/.test(nm) || /\bst\b$/.test(nm);
     if (!idHasState.has(teamId)) idHasState.set(teamId, hasState);
     else idHasState.set(teamId, idHasState.get(teamId) || hasState);
   }
@@ -523,7 +524,10 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
   // --- Critical rule: do NOT allow fuzzy "non-state" -> "state teamId" ---
   // This prevents: "North Dakota" matching "North Dakota State" etc.
   if (bestId && bestScore >= 0.72) {
-    const cleanedHasState = /\bstate\b/.test(cleaned);
+    // Treat both "state" and trailing "st" as "state team"
+    const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
+
+    
     if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) {
       return null;
     }
@@ -559,10 +563,20 @@ function buildIdKeyFromLine(line, teamIndex, strictMode) {
 function buildStringKeyFromLine(line) {
   const parsed = parseMatchupTeams(line);
   if (!parsed) return null;
-  const away = cleanTeamName(parsed.awayText);
-  const home = cleanTeamName(parsed.homeText);
+
+  const awayRaw = stripLeadingJunk(parsed.awayText);
+  const homeRaw = stripLeadingJunk(parsed.homeText);
+
+  const away = cleanTeamName(awayRaw);
+  const home = cleanTeamName(homeRaw);
   if (!away || !home) return null;
-  return `${away}|${home}`;
+
+  // Enforce "State/St" consistency in STRING matching too
+  const awayHasState = /\bstate\b/i.test(awayRaw) || /\bst\.?\s*$/i.test(awayRaw);
+  const homeHasState = /\bstate\b/i.test(homeRaw) || /\bst\.?\s*$/i.test(homeRaw);
+
+  // Encode the flag into the key so "Sacramento" won't match "Sacramento St"
+  return `${away}|${awayHasState ? "S" : "NS"}|${home}|${homeHasState ? "S" : "NS"}`;
 }
 
 // --------------------------
@@ -1086,3 +1100,4 @@ document.addEventListener("DOMContentLoaded", () => {
 
   compareAndRender();
 });
+
