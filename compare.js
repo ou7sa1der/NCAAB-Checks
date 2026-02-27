@@ -15,10 +15,6 @@
 // - Filters (All / Matches / Mismatches / ESPN missing / Other leftover)
 // - Duplicate detection (ESPN + Other)
 // - Venue column (H / N / ?), learned over time from ESPN API
-//
-// FIX (2026-03): Prevent "San Diego" (USD) from incorrectly matching "UC San Diego" (UCSD)
-// - Canonicalize UCSD to "california san diego" (align with BCM naming)
-// - Add fuzzy-guard so plain "san diego" will NOT fuzzy-match UCSD
 
 const ESPN_SCOREBOARD =
   "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard";
@@ -158,6 +154,12 @@ function stripLeadingJunk(line) {
 // --------------------------
 // TEAM ALIASES
 // --------------------------
+//
+// IMPORTANT CHANGE:
+// - BCM uses "California San Diego" as the canonical text.
+// - We must NOT normalize it to "UC San Diego" anymore.
+// - Also, we should keep "San Diego" separate (do NOT alias it to UC/California San Diego).
+//
 const TEAM_ALIASES_COMMON = new Map([
   ["eastern tennessee st", "east tennessee state"],
   ["eastern tennessee state", "east tennessee state"],
@@ -179,12 +181,14 @@ const TEAM_ALIASES_COMMON = new Map([
   ["s dakota st", "south dakota state"],
   ["s. dakota st", "south dakota state"],
 
-  // --- UC San Diego canonicalization (align with BCM naming) ---
-  // ESPN often says "UC San Diego"; BCM says "California San Diego".
-  // IMPORTANT: Do NOT map plain "San Diego" to this.
+  // ---- San Diego family (FIX) ----
+  // Canonicalize UC/California San Diego to BCM's "california san diego"
   ["uc san diego", "california san diego"],
-  ["cal san diego", "california san diego"],
+  ["u c san diego", "california san diego"],
   ["california san diego", "california san diego"],
+  ["cal san diego", "california san diego"],
+  ["calif san diego", "california san diego"],
+  // NOTE: do NOT map "san diego" -> california/uc; that is a different school.
 
   ["indiana u", "indiana"],
   ["indiana u.", "indiana"],
@@ -270,7 +274,7 @@ const TEAM_ALIASES_COMMON = new Map([
   ["appalachian st", "appalachian state"],
   ["ga southern", "georgia southern"],
   ["texas a&m", "texas a and m"],
-  ["lmu", "loyola marymount"],
+  ["lmu", "loyola marymount"],   // keep this!
   ["pitt", "pittsburgh"],
   ["miami", "miami florida"],
   ["milwaukee", "wisc milwaukee"],
@@ -372,6 +376,7 @@ function cleanTeamName(s) {
   if (TEAM_ALIASES_COMMON.has(s)) s = TEAM_ALIASES_COMMON.get(s);
   if (TEAM_ALIASES_MEN.has(s)) s = TEAM_ALIASES_MEN.get(s);
 
+  // "Seattle U" => "Seattle", etc.
   s = s.replace(/\b([a-z]+)\s+u\b/g, "$1");
   return s;
 }
@@ -500,12 +505,33 @@ function buildTeamIndexFromEspnGames(espnGames) {
   return { abbrToId, nameToId, idHasState };
 }
 
-// --- Disambiguation guard: prevent "san diego" from matching "california san diego" (UCSD) ---
-function isPlainSanDiego(cleanedName) {
-  return cleanedName === "san diego";
-}
-function isUcSanDiegoCanonical(knownCleanedName) {
-  return knownCleanedName === "california san diego";
+// Guard against known “look-alike” teams where fuzzy must NOT auto-map.
+function isBlockedFuzzyPair(cleaned, bestKnownName) {
+  const a = String(cleaned || "");
+  const b = String(bestKnownName || "");
+  if (!a || !b) return false;
+  if (a === b) return false;
+
+  // 1) San Diego vs California/UC San Diego (different schools)
+  if (
+    (a === "san diego" && (b === "california san diego" || b === "uc san diego")) ||
+    (b === "san diego" && (a === "california san diego" || a === "uc san diego"))
+  ) {
+    return true;
+  }
+
+  // 2) Loyola Marymount vs Loyola Maryland (similar strings)
+  const loyA = a.startsWith("loyola ");
+  const loyB = b.startsWith("loyola ");
+  if (loyA && loyB) {
+    const aIsMaryland = a === "loyola maryland";
+    const bIsMaryland = b === "loyola maryland";
+    const aIsMarymount = a === "loyola marymount";
+    const bIsMarymount = b === "loyola marymount";
+    if ((aIsMaryland && bIsMarymount) || (aIsMarymount && bIsMaryland)) return true;
+  }
+
+  return false;
 }
 
 function resolveTeamToId(teamText, teamIndex, strictMode) {
@@ -540,20 +566,20 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
     }
   }
 
+  // --- Critical rule: do NOT allow fuzzy "non-state" -> "state teamId" ---
+  // This prevents: "North Dakota" matching "North Dakota State" etc.
   if (bestId && bestScore >= 0.72) {
-    // --- Guard 1: UC San Diego vs San Diego ---
-    // If user typed "San Diego" (plain), do NOT allow fuzzy to pick UCSD ("California San Diego").
-    if (isPlainSanDiego(cleaned) && isUcSanDiegoCanonical(bestName)) {
+    // Treat both "state" and trailing "st" as "state team"
+    const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
+
+    // BLOCK fuzzy for known confusing pairs (San Diego, Loyola, etc.)
+    if (isBlockedFuzzyPair(cleaned, bestName)) {
       return null;
     }
 
-    // --- Guard 2: do NOT allow fuzzy "non-state" -> "state teamId" ---
-    // This prevents: "North Dakota" matching "North Dakota State" etc.
-    const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
     if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) {
       return null;
     }
-
     return bestId;
   }
 
