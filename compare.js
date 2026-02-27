@@ -15,6 +15,12 @@
 // - Filters (All / Matches / Mismatches / ESPN missing / Other leftover)
 // - Duplicate detection (ESPN + Other)
 // - Venue column (H / N / ?), learned over time from ESPN API
+//
+// FIXES (your cases):
+// - Prevent fuzzy matching between *San Diego* and *UC/California San Diego*
+// - Prevent fuzzy matching between *Loyola Marymount* and *Loyola Maryland*
+// - Prevent fuzzy matching between *Texas A&M* and *Texas A&M Corpus Christi*
+// - BCM canonical: use "California San Diego" (not "UC San Diego") in cleaning aliases
 
 const ESPN_SCOREBOARD =
   "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard";
@@ -154,12 +160,6 @@ function stripLeadingJunk(line) {
 // --------------------------
 // TEAM ALIASES
 // --------------------------
-//
-// IMPORTANT CHANGE:
-// - BCM uses "California San Diego" as the canonical text.
-// - We must NOT normalize it to "UC San Diego" anymore.
-// - Also, we should keep "San Diego" separate (do NOT alias it to UC/California San Diego).
-//
 const TEAM_ALIASES_COMMON = new Map([
   ["eastern tennessee st", "east tennessee state"],
   ["eastern tennessee state", "east tennessee state"],
@@ -181,14 +181,10 @@ const TEAM_ALIASES_COMMON = new Map([
   ["s dakota st", "south dakota state"],
   ["s. dakota st", "south dakota state"],
 
-  // ---- San Diego family (FIX) ----
-  // Canonicalize UC/California San Diego to BCM's "california san diego"
+  // IMPORTANT: BCM canonical is "California San Diego"
   ["uc san diego", "california san diego"],
-  ["u c san diego", "california san diego"],
-  ["california san diego", "california san diego"],
   ["cal san diego", "california san diego"],
-  ["calif san diego", "california san diego"],
-  // NOTE: do NOT map "san diego" -> california/uc; that is a different school.
+  ["california san diego", "california san diego"],
 
   ["indiana u", "indiana"],
   ["indiana u.", "indiana"],
@@ -274,7 +270,7 @@ const TEAM_ALIASES_COMMON = new Map([
   ["appalachian st", "appalachian state"],
   ["ga southern", "georgia southern"],
   ["texas a&m", "texas a and m"],
-  ["lmu", "loyola marymount"],   // keep this!
+  ["lmu", "loyola marymount"], // keep, but guard fuzzy confusion with Loyola Maryland below
   ["pitt", "pittsburgh"],
   ["miami", "miami florida"],
   ["milwaukee", "wisc milwaukee"],
@@ -376,7 +372,6 @@ function cleanTeamName(s) {
   if (TEAM_ALIASES_COMMON.has(s)) s = TEAM_ALIASES_COMMON.get(s);
   if (TEAM_ALIASES_MEN.has(s)) s = TEAM_ALIASES_MEN.get(s);
 
-  // "Seattle U" => "Seattle", etc.
   s = s.replace(/\b([a-z]+)\s+u\b/g, "$1");
   return s;
 }
@@ -465,20 +460,34 @@ function similarity(a, b) {
 }
 
 // --------------------------
-// TEAM INDEX FROM ESPN (with State flag per teamId)
+// TEAM INDEX FROM ESPN (with flags per teamId for ambiguity guards)
 // --------------------------
 function buildTeamIndexFromEspnGames(espnGames) {
   const abbrToId = new Map();
   const nameToId = new Map();
   const idHasState = new Map(); // teamId -> boolean (based on ESPN display name)
 
-  function markStateFlag(teamId, displayName) {
+  // Ambiguity guard flags
+  const idHasCorpus = new Map();     // Texas A&M vs Texas A&M Corpus Christi
+  const idHasMarymount = new Map();  // Loyola Marymount vs Loyola Maryland
+  const idHasMaryland = new Map();
+  const idHasUCOrCalifornia = new Map(); // UC/California schools (your UCSD issue)
+
+  function markFlags(teamId, displayName) {
     if (!teamId) return;
     const nm = cleanTeamName(displayName || "");
-    // ESPN often uses "... St." instead of "... State"
+
     const hasState = /\bstate\b/.test(nm) || /\bst\b$/.test(nm);
-    if (!idHasState.has(teamId)) idHasState.set(teamId, hasState);
-    else idHasState.set(teamId, idHasState.get(teamId) || hasState);
+    const hasCorpus = /\bcorpus\b/.test(nm);
+    const hasMarymount = /\bmarymount\b/.test(nm);
+    const hasMaryland = /\bmaryland\b/.test(nm);
+    const hasUCOrCalifornia = /\buc\b/.test(nm) || /\bcalifornia\b/.test(nm);
+
+    idHasState.set(teamId, (idHasState.get(teamId) || false) || hasState);
+    idHasCorpus.set(teamId, (idHasCorpus.get(teamId) || false) || hasCorpus);
+    idHasMarymount.set(teamId, (idHasMarymount.get(teamId) || false) || hasMarymount);
+    idHasMaryland.set(teamId, (idHasMaryland.get(teamId) || false) || hasMaryland);
+    idHasUCOrCalifornia.set(teamId, (idHasUCOrCalifornia.get(teamId) || false) || hasUCOrCalifornia);
   }
 
   for (const g of espnGames) {
@@ -489,7 +498,7 @@ function buildTeamIndexFromEspnGames(espnGames) {
         nameToId.set(cleanTeamName(g.awayAbbr), id);
       }
       nameToId.set(cleanTeamName(g.away), id);
-      markStateFlag(id, g.away);
+      markFlags(id, g.away);
     }
     if (g.homeId) {
       const id = g.homeId;
@@ -498,40 +507,19 @@ function buildTeamIndexFromEspnGames(espnGames) {
         nameToId.set(cleanTeamName(g.homeAbbr), id);
       }
       nameToId.set(cleanTeamName(g.home), id);
-      markStateFlag(id, g.home);
+      markFlags(id, g.home);
     }
   }
 
-  return { abbrToId, nameToId, idHasState };
-}
-
-// Guard against known “look-alike” teams where fuzzy must NOT auto-map.
-function isBlockedFuzzyPair(cleaned, bestKnownName) {
-  const a = String(cleaned || "");
-  const b = String(bestKnownName || "");
-  if (!a || !b) return false;
-  if (a === b) return false;
-
-  // 1) San Diego vs California/UC San Diego (different schools)
-  if (
-    (a === "san diego" && (b === "california san diego" || b === "uc san diego")) ||
-    (b === "san diego" && (a === "california san diego" || a === "uc san diego"))
-  ) {
-    return true;
-  }
-
-  // 2) Loyola Marymount vs Loyola Maryland (similar strings)
-  const loyA = a.startsWith("loyola ");
-  const loyB = b.startsWith("loyola ");
-  if (loyA && loyB) {
-    const aIsMaryland = a === "loyola maryland";
-    const bIsMaryland = b === "loyola maryland";
-    const aIsMarymount = a === "loyola marymount";
-    const bIsMarymount = b === "loyola marymount";
-    if ((aIsMaryland && bIsMarymount) || (aIsMarymount && bIsMaryland)) return true;
-  }
-
-  return false;
+  return {
+    abbrToId,
+    nameToId,
+    idHasState,
+    idHasCorpus,
+    idHasMarymount,
+    idHasMaryland,
+    idHasUCOrCalifornia,
+  };
 }
 
 function resolveTeamToId(teamText, teamIndex, strictMode) {
@@ -554,7 +542,6 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
 
   // Fuzzy
   let bestId = null;
-  let bestName = null;
   let bestScore = 0;
 
   for (const [knownName, id] of teamIndex.nameToId.entries()) {
@@ -562,24 +549,39 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
     if (score > bestScore) {
       bestScore = score;
       bestId = id;
-      bestName = knownName;
     }
   }
 
-  // --- Critical rule: do NOT allow fuzzy "non-state" -> "state teamId" ---
-  // This prevents: "North Dakota" matching "North Dakota State" etc.
+  // Accept fuzzy only above threshold AND only if ambiguity-guards pass
   if (bestId && bestScore >= 0.72) {
     // Treat both "state" and trailing "st" as "state team"
     const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
+    if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) return null;
 
-    // BLOCK fuzzy for known confusing pairs (San Diego, Loyola, etc.)
-    if (isBlockedFuzzyPair(cleaned, bestName)) {
-      return null;
+    // --- Extra guard: Corpus must be consistent (prevents "Texas A&M" -> "Texas A&M Corpus") ---
+    const cleanedHasCorpus = /\bcorpus\b/.test(cleaned);
+    const idCorpus = !!teamIndex.idHasCorpus?.get(bestId);
+    if (cleanedHasCorpus !== idCorpus) return null;
+
+    // --- Extra guard: Loyola Maryland vs Loyola Marymount must be consistent ---
+    const cleanedHasMarymount = /\bmarymount\b/.test(cleaned);
+    const cleanedHasMaryland = /\bmaryland\b/.test(cleaned);
+    const idMarymount = !!teamIndex.idHasMarymount?.get(bestId);
+    const idMaryland = !!teamIndex.idHasMaryland?.get(bestId);
+
+    // Only apply when either side touches those tokens (so we don't over-block unrelated teams)
+    if (cleanedHasMarymount || cleanedHasMaryland || idMarymount || idMaryland) {
+      if (cleanedHasMarymount !== idMarymount) return null;
+      if (cleanedHasMaryland !== idMaryland) return null;
     }
 
-    if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) {
-      return null;
-    }
+    // --- Extra guard: UC/California brand must be consistent (prevents "San Diego" -> "California/UC San Diego") ---
+    const cleanedHasUCOrCalifornia = /\buc\b/.test(cleaned) || /\bcalifornia\b/.test(cleaned);
+    const idUCOrCalifornia = !!teamIndex.idHasUCOrCalifornia?.get(bestId);
+
+    // If ESPN team is UC/California-branded, require the input to be too (and vice versa)
+    if (cleanedHasUCOrCalifornia !== idUCOrCalifornia) return null;
+
     return bestId;
   }
 
@@ -624,8 +626,34 @@ function buildStringKeyFromLine(line) {
   const awayHasState = /\bstate\b/i.test(awayRaw) || /\bst\.?\s*$/i.test(awayRaw);
   const homeHasState = /\bstate\b/i.test(homeRaw) || /\bst\.?\s*$/i.test(homeRaw);
 
-  // Encode the flag into the key so "Sacramento" won't match "Sacramento St"
-  return `${away}|${awayHasState ? "S" : "NS"}|${home}|${homeHasState ? "S" : "NS"}`;
+  // Extra string-guards for your ambiguous cases:
+  // - UC/California branding
+  // - Corpus
+  // - Loyola Maryland vs Marymount
+  const awayHasUCOrCalifornia = /\buc\b/i.test(awayRaw) || /\bcalifornia\b/i.test(awayRaw);
+  const homeHasUCOrCalifornia = /\buc\b/i.test(homeRaw) || /\bcalifornia\b/i.test(homeRaw);
+
+  const awayHasCorpus = /\bcorpus\b/i.test(awayRaw);
+  const homeHasCorpus = /\bcorpus\b/i.test(homeRaw);
+
+  const awayHasMarymount = /\bmarymount\b/i.test(awayRaw);
+  const awayHasMaryland = /\bmaryland\b/i.test(awayRaw);
+  const homeHasMarymount = /\bmarymount\b/i.test(homeRaw);
+  const homeHasMaryland = /\bmaryland\b/i.test(homeRaw);
+
+  // Encode the flags into the key so lookalikes won't match
+  return [
+    away,
+    awayHasState ? "S" : "NS",
+    awayHasUCOrCalifornia ? "UC" : "NUC",
+    awayHasCorpus ? "C" : "NC",
+    awayHasMarymount ? "MMT" : (awayHasMaryland ? "MLD" : "MNO"),
+    home,
+    homeHasState ? "S" : "NS",
+    homeHasUCOrCalifornia ? "UC" : "NUC",
+    homeHasCorpus ? "C" : "NC",
+    homeHasMarymount ? "MMT" : (homeHasMaryland ? "MLD" : "MNO"),
+  ].join("|");
 }
 
 // --------------------------
