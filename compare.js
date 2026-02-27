@@ -15,6 +15,10 @@
 // - Filters (All / Matches / Mismatches / ESPN missing / Other leftover)
 // - Duplicate detection (ESPN + Other)
 // - Venue column (H / N / ?), learned over time from ESPN API
+//
+// FIX (2026-03): Prevent "San Diego" (USD) from incorrectly matching "UC San Diego" (UCSD)
+// - Canonicalize UCSD to "california san diego" (align with BCM naming)
+// - Add fuzzy-guard so plain "san diego" will NOT fuzzy-match UCSD
 
 const ESPN_SCOREBOARD =
   "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard";
@@ -175,7 +179,12 @@ const TEAM_ALIASES_COMMON = new Map([
   ["s dakota st", "south dakota state"],
   ["s. dakota st", "south dakota state"],
 
-  ["california san diego", "uc san diego"],
+  // --- UC San Diego canonicalization (align with BCM naming) ---
+  // ESPN often says "UC San Diego"; BCM says "California San Diego".
+  // IMPORTANT: Do NOT map plain "San Diego" to this.
+  ["uc san diego", "california san diego"],
+  ["cal san diego", "california san diego"],
+  ["california san diego", "california san diego"],
 
   ["indiana u", "indiana"],
   ["indiana u.", "indiana"],
@@ -192,7 +201,6 @@ const TEAM_ALIASES_COMMON = new Map([
   ["detroit mercy", "detroit mercy"],
 
   ["cal irvine", "uc irvine"],
-  ["cal san diego", "uc san diego"],
   ["cal riverside", "uc riverside"],
   ["ca baptist", "california baptist"],
 
@@ -492,6 +500,14 @@ function buildTeamIndexFromEspnGames(espnGames) {
   return { abbrToId, nameToId, idHasState };
 }
 
+// --- Disambiguation guard: prevent "san diego" from matching "california san diego" (UCSD) ---
+function isPlainSanDiego(cleanedName) {
+  return cleanedName === "san diego";
+}
+function isUcSanDiegoCanonical(knownCleanedName) {
+  return knownCleanedName === "california san diego";
+}
+
 function resolveTeamToId(teamText, teamIndex, strictMode) {
   if (!teamIndex) return null;
   const raw = stripLeadingJunk(teamText);
@@ -512,25 +528,32 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
 
   // Fuzzy
   let bestId = null;
+  let bestName = null;
   let bestScore = 0;
+
   for (const [knownName, id] of teamIndex.nameToId.entries()) {
     const score = similarity(cleaned, knownName);
     if (score > bestScore) {
       bestScore = score;
       bestId = id;
+      bestName = knownName;
     }
   }
 
-  // --- Critical rule: do NOT allow fuzzy "non-state" -> "state teamId" ---
-  // This prevents: "North Dakota" matching "North Dakota State" etc.
   if (bestId && bestScore >= 0.72) {
-    // Treat both "state" and trailing "st" as "state team"
-    const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
+    // --- Guard 1: UC San Diego vs San Diego ---
+    // If user typed "San Diego" (plain), do NOT allow fuzzy to pick UCSD ("California San Diego").
+    if (isPlainSanDiego(cleaned) && isUcSanDiegoCanonical(bestName)) {
+      return null;
+    }
 
-    
+    // --- Guard 2: do NOT allow fuzzy "non-state" -> "state teamId" ---
+    // This prevents: "North Dakota" matching "North Dakota State" etc.
+    const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
     if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) {
       return null;
     }
+
     return bestId;
   }
 
@@ -1100,4 +1123,3 @@ document.addEventListener("DOMContentLoaded", () => {
 
   compareAndRender();
 });
-
