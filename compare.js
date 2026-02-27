@@ -254,7 +254,14 @@ const TEAM_ALIASES_COMMON = new Map([
 
   ["se missouri", "se missouri state"],
   ["siue", "siu edwardsville"],
-
+  
+    // Texas A&M-CC (Corpus Christi) — IMPORTANT: after cleaning, ESPN becomes "texas a and m cc"
+  ["texas a and m cc", "texas a and m corpus"],
+  ["texas a and m c c", "texas a and m corpus"], // just in case spacing weirdness ever happens
+  ["texas am cc", "texas a and m corpus"],
+  ["texas a m cc", "texas a and m corpus"],
+  ["texas a and m corpus christi", "texas a and m corpus"],
+  
   ["arkansas lr", "little rock"],
   ["w illinois", "western illinois"],
 
@@ -1177,3 +1184,4 @@ document.addEventListener("DOMContentLoaded", () => {
 
   compareAndRender();
 });
+
