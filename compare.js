@@ -20,6 +20,7 @@
 // - Prevent fuzzy matching between *San Diego* and *UC/California San Diego*
 // - Prevent fuzzy matching between *Loyola Marymount* and *Loyola Maryland*
 // - Prevent fuzzy matching between *Texas A&M* and *Texas A&M Corpus Christi*
+// - Prevent fuzzy matching between plain *Miami* and *Miami Florida*
 // - BCM canonical: use "California San Diego" (not "UC San Diego") in cleaning aliases
 
 const ESPN_SCOREBOARD =
@@ -105,34 +106,40 @@ function updateHomeVenueDbFromGames(games) {
 // Venue classification: only H / N / ?
 function classifyVenueForGame(game, homeVenueDb) {
   const venueName = game?.venueName || "";
+  const venueCity = game?.venueCity || "";
+  const venueState = game?.venueState || "";
   const neutral = !!game?.neutralSite;
 
   // Neutral or non-home both become "N" for operational simplicity
   if (neutral) {
-    return { code: "N", label: "Not home (neutral)", venueName };
+    return { code: "N", label: "Not home (neutral)", venueName, venueCity, venueState };
   }
 
   const homeId = game?.homeId ? String(game.homeId) : null;
   const venueId = game?.venueId ? String(game.venueId) : null;
-  if (!homeId || !venueId) return { code: "?", label: "Unknown venue", venueName };
+  if (!homeId || !venueId) {
+    return { code: "?", label: "Unknown venue", venueName, venueCity, venueState };
+  }
 
   const homeRec = homeVenueDb?.[homeId];
-  if (!homeRec?.primaryVenueId) return { code: "?", label: "Home venue not learned yet", venueName };
+  if (!homeRec?.primaryVenueId) {
+    return { code: "?", label: "Home venue not learned yet", venueName, venueCity, venueState };
+  }
 
   // Exact ID match
   if (String(homeRec.primaryVenueId) === venueId) {
-    return { code: "H", label: "Home venue", venueName };
+    return { code: "H", label: "Home venue", venueName, venueCity, venueState };
   }
 
   // Fallback name match (rare: same arena but diff ID)
   const a = normalizeVenueName(homeRec.primaryVenueName);
   const b = normalizeVenueName(venueName);
   if (a && b && a === b) {
-    return { code: "H", label: "Home venue", venueName };
+    return { code: "H", label: "Home venue", venueName, venueCity, venueState };
   }
 
   // Everything else is "N" (not-home)
-  return { code: "N", label: "Not home (alternate site)", venueName };
+  return { code: "N", label: "Not home (alternate site)", venueName, venueCity, venueState };
 }
 
 function venueBadgeHtml(v) {
@@ -254,14 +261,14 @@ const TEAM_ALIASES_COMMON = new Map([
 
   ["se missouri", "se missouri state"],
   ["siue", "siu edwardsville"],
-  
-    // Texas A&M-CC (Corpus Christi) — IMPORTANT: after cleaning, ESPN becomes "texas a and m cc"
+
+  // Texas A&M-CC (Corpus Christi) — cleaned ESPN form becomes "texas a and m cc"
   ["texas a and m cc", "texas a and m corpus"],
-  ["texas a and m c c", "texas a and m corpus"], // just in case spacing weirdness ever happens
+  ["texas a and m c c", "texas a and m corpus"],
   ["texas am cc", "texas a and m corpus"],
   ["texas a m cc", "texas a and m corpus"],
   ["texas a and m corpus christi", "texas a and m corpus"],
-  
+
   ["arkansas lr", "little rock"],
   ["w illinois", "western illinois"],
 
@@ -277,9 +284,9 @@ const TEAM_ALIASES_COMMON = new Map([
   ["appalachian st", "appalachian state"],
   ["ga southern", "georgia southern"],
   ["texas a&m", "texas a and m"],
-  ["lmu", "loyola marymount"], // keep, but guard fuzzy confusion with Loyola Maryland below
+  ["lmu", "loyola marymount"],
   ["pitt", "pittsburgh"],
-  ["miami", "miami florida"],
+  // REMOVED on purpose: ["miami", "miami florida"]
   ["milwaukee", "wisc milwaukee"],
   ["g washington", "george washington"],
   ["saint josephs", "st josephs"],
@@ -472,29 +479,35 @@ function similarity(a, b) {
 function buildTeamIndexFromEspnGames(espnGames) {
   const abbrToId = new Map();
   const nameToId = new Map();
-  const idHasState = new Map(); // teamId -> boolean (based on ESPN display name)
+  const idHasState = new Map();
 
   // Ambiguity guard flags
-  const idHasCorpus = new Map();     // Texas A&M vs Texas A&M Corpus Christi
-  const idHasMarymount = new Map();  // Loyola Marymount vs Loyola Maryland
+  const idHasCorpus = new Map();
+  const idHasMarymount = new Map();
   const idHasMaryland = new Map();
-  const idHasUCOrCalifornia = new Map(); // UC/California schools (your UCSD issue)
+  const idHasUCOrCalifornia = new Map();
+  const idHasFlorida = new Map();
 
   function markFlags(teamId, displayName) {
     if (!teamId) return;
     const nm = cleanTeamName(displayName || "");
 
     const hasState = /\bstate\b/.test(nm) || /\bst\b$/.test(nm);
-    const hasCorpus = /\bcorpus\b/.test(nm);
+    const hasCorpus =
+      /\bcorpus\b/.test(nm) ||
+      /\btexas a and m cc\b/.test(nm) ||
+      /\btexas am cc\b/.test(nm);
     const hasMarymount = /\bmarymount\b/.test(nm);
     const hasMaryland = /\bmaryland\b/.test(nm);
     const hasUCOrCalifornia = /\buc\b/.test(nm) || /\bcalifornia\b/.test(nm);
+    const hasFlorida = /\bflorida\b/.test(nm);
 
     idHasState.set(teamId, (idHasState.get(teamId) || false) || hasState);
     idHasCorpus.set(teamId, (idHasCorpus.get(teamId) || false) || hasCorpus);
     idHasMarymount.set(teamId, (idHasMarymount.get(teamId) || false) || hasMarymount);
     idHasMaryland.set(teamId, (idHasMaryland.get(teamId) || false) || hasMaryland);
     idHasUCOrCalifornia.set(teamId, (idHasUCOrCalifornia.get(teamId) || false) || hasUCOrCalifornia);
+    idHasFlorida.set(teamId, (idHasFlorida.get(teamId) || false) || hasFlorida);
   }
 
   for (const g of espnGames) {
@@ -526,6 +539,7 @@ function buildTeamIndexFromEspnGames(espnGames) {
     idHasMarymount,
     idHasMaryland,
     idHasUCOrCalifornia,
+    idHasFlorida,
   };
 }
 
@@ -565,29 +579,31 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
     const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
     if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) return null;
 
-    // --- Extra guard: Corpus must be consistent (prevents "Texas A&M" -> "Texas A&M Corpus") ---
+    // Corpus consistency
     const cleanedHasCorpus = /\bcorpus\b/.test(cleaned);
     const idCorpus = !!teamIndex.idHasCorpus?.get(bestId);
     if (cleanedHasCorpus !== idCorpus) return null;
 
-    // --- Extra guard: Loyola Maryland vs Loyola Marymount must be consistent ---
+    // Loyola Maryland vs Loyola Marymount consistency
     const cleanedHasMarymount = /\bmarymount\b/.test(cleaned);
     const cleanedHasMaryland = /\bmaryland\b/.test(cleaned);
     const idMarymount = !!teamIndex.idHasMarymount?.get(bestId);
     const idMaryland = !!teamIndex.idHasMaryland?.get(bestId);
 
-    // Only apply when either side touches those tokens (so we don't over-block unrelated teams)
     if (cleanedHasMarymount || cleanedHasMaryland || idMarymount || idMaryland) {
       if (cleanedHasMarymount !== idMarymount) return null;
       if (cleanedHasMaryland !== idMaryland) return null;
     }
 
-    // --- Extra guard: UC/California brand must be consistent (prevents "San Diego" -> "California/UC San Diego") ---
+    // UC/California consistency
     const cleanedHasUCOrCalifornia = /\buc\b/.test(cleaned) || /\bcalifornia\b/.test(cleaned);
     const idUCOrCalifornia = !!teamIndex.idHasUCOrCalifornia?.get(bestId);
-
-    // If ESPN team is UC/California-branded, require the input to be too (and vice versa)
     if (cleanedHasUCOrCalifornia !== idUCOrCalifornia) return null;
+
+    // Florida consistency (prevents plain Miami -> Miami Florida)
+    const cleanedHasFlorida = /\bflorida\b/.test(cleaned);
+    const idFlorida = !!teamIndex.idHasFlorida?.get(bestId);
+    if (cleanedHasFlorida !== idFlorida) return null;
 
     return bestId;
   }
@@ -633,32 +649,35 @@ function buildStringKeyFromLine(line) {
   const awayHasState = /\bstate\b/i.test(awayRaw) || /\bst\.?\s*$/i.test(awayRaw);
   const homeHasState = /\bstate\b/i.test(homeRaw) || /\bst\.?\s*$/i.test(homeRaw);
 
-  // Extra string-guards for your ambiguous cases:
-  // - UC/California branding
-  // - Corpus
-  // - Loyola Maryland vs Marymount
+  // Extra string-guards for ambiguous cases
   const awayHasUCOrCalifornia = /\buc\b/i.test(awayRaw) || /\bcalifornia\b/i.test(awayRaw);
   const homeHasUCOrCalifornia = /\buc\b/i.test(homeRaw) || /\bcalifornia\b/i.test(homeRaw);
 
-  const awayHasCorpus = /\bcorpus\b/i.test(awayRaw);
-  const homeHasCorpus = /\bcorpus\b/i.test(homeRaw);
+  const corpusRe = /\bcorpus\b/i;
+  const tamccRe = /\btexas\s+a\s*&\s*m\s*-?\s*cc\b/i;
+  const awayHasCorpus = corpusRe.test(awayRaw) || tamccRe.test(awayRaw);
+  const homeHasCorpus = corpusRe.test(homeRaw) || tamccRe.test(homeRaw);
+
+  const awayHasFlorida = /\bflorida\b/i.test(awayRaw);
+  const homeHasFlorida = /\bflorida\b/i.test(homeRaw);
 
   const awayHasMarymount = /\bmarymount\b/i.test(awayRaw);
   const awayHasMaryland = /\bmaryland\b/i.test(awayRaw);
   const homeHasMarymount = /\bmarymount\b/i.test(homeRaw);
   const homeHasMaryland = /\bmaryland\b/i.test(homeRaw);
 
-  // Encode the flags into the key so lookalikes won't match
   return [
     away,
     awayHasState ? "S" : "NS",
     awayHasUCOrCalifornia ? "UC" : "NUC",
     awayHasCorpus ? "C" : "NC",
+    awayHasFlorida ? "FL" : "NFL",
     awayHasMarymount ? "MMT" : (awayHasMaryland ? "MLD" : "MNO"),
     home,
     homeHasState ? "S" : "NS",
     homeHasUCOrCalifornia ? "UC" : "NUC",
     homeHasCorpus ? "C" : "NC",
+    homeHasFlorida ? "FL" : "NFL",
     homeHasMarymount ? "MMT" : (homeHasMaryland ? "MLD" : "MNO"),
   ].join("|");
 }
@@ -708,8 +727,8 @@ function compareAndRender() {
   const idMatchingEnabled = hasTeamIndex;
 
   // Build lookup maps for OTHER (duplicate-safe: arrays/queues)
-  const otherByIdKey = new Map();   // key -> [{ line, idx }]
-  const otherByStrKey = new Map();  // key -> [{ line, idx }]
+  const otherByIdKey = new Map();
+  const otherByStrKey = new Map();
   const consumedOtherIdx = new Set();
 
   let dupOtherIdKeys = 0;
@@ -795,7 +814,17 @@ function compareAndRender() {
     badge.title = b.title;
 
     const venueText = document.createElement("span");
-    venueText.textContent = vInfo?.venueName ? vInfo.venueName : "";
+    let location = "";
+    if (vInfo?.venueCity && vInfo?.venueState) {
+      location = `${vInfo.venueCity}, ${vInfo.venueState}`;
+    } else if (vInfo?.venueCity) {
+      location = vInfo.venueCity;
+    } else if (vInfo?.venueState) {
+      location = vInfo.venueState;
+    }
+
+    venueText.textContent =
+      `${vInfo?.venueName || ""}${location ? " | " + location : ""}`;
 
     venueCell.appendChild(badge);
     venueCell.appendChild(venueText);
@@ -984,6 +1013,8 @@ function parseScoreboard(json) {
     const venue = comp?.venue || null;
     const venueId = venue?.id || null;
     const venueName = venue?.fullName || venue?.name || "";
+    const venueCity = venue?.address?.city || "";
+    const venueState = venue?.address?.state || "";
     const neutralSite = !!comp?.neutralSite;
 
     const competitors = comp?.competitors ?? [];
@@ -1019,6 +1050,8 @@ function parseScoreboard(json) {
       madridTime,
       venueId,
       venueName,
+      venueCity,
+      venueState,
       neutralSite,
       line: `${away} @ ${home} (${madridDate} ${madridTime})`,
     });
@@ -1184,4 +1217,3 @@ document.addEventListener("DOMContentLoaded", () => {
 
   compareAndRender();
 });
-
