@@ -490,25 +490,31 @@ function buildTeamIndexFromEspnGames(espnGames) {
   const idHasFlorida = new Map();
 
   function markFlags(teamId, displayName) {
-    if (!teamId) return;
-    const nm = cleanTeamName(displayName || "");
+  if (!teamId) return;
+  const nm = cleanTeamName(displayName || "");
 
-    const hasState = /\bstate\b/.test(nm) || /\bst\b$/.test(nm);
-    const hasCorpus =
-      /\bcorpus\b/.test(nm) ||
-      /\btexas a and m cc\b/.test(nm) ||
-      /\btexas am cc\b/.test(nm);
-    const hasMarymount = /\bmarymount\b/.test(nm);
-    const hasMaryland = /\bmaryland\b/.test(nm);
-    const hasUCOrCalifornia = /\buc\b/.test(nm) || /\bcalifornia\b/.test(nm);
-    const hasFlorida = /\bflorida\b/.test(nm);
+  const hasState = /\bstate\b/.test(nm) || /\bst\b$/.test(nm);
+  const hasCorpus =
+    /\bcorpus\b/.test(nm) ||
+    /\btexas a and m cc\b/.test(nm) ||
+    /\btexas am cc\b/.test(nm);
+  const hasMarymount = /\bmarymount\b/.test(nm);
+  const hasMaryland = /\bmaryland\b/.test(nm);
+  const hasUCOrCalifornia = /\buc\b/.test(nm) || /\bcalifornia\b/.test(nm);
 
-    idHasState.set(teamId, (idHasState.get(teamId) || false) || hasState);
-    idHasCorpus.set(teamId, (idHasCorpus.get(teamId) || false) || hasCorpus);
-    idHasMarymount.set(teamId, (idHasMarymount.get(teamId) || false) || hasMarymount);
-    idHasMaryland.set(teamId, (idHasMaryland.get(teamId) || false) || hasMaryland);
-    idHasUCOrCalifornia.set(teamId, (idHasUCOrCalifornia.get(teamId) || false) || hasUCOrCalifornia);
-    idHasFlorida.set(teamId, (idHasFlorida.get(teamId) || false) || hasFlorida);
+  // IMPORTANT:
+  // ESPN plain "Miami" in men's NCAA should be treated as Miami Florida.
+  // Miami Ohio comes as "Miami OH", so it will NOT hit nm === "miami".
+  const hasFlorida =
+    /\bflorida\b/.test(nm) ||
+    nm === "miami";
+
+  idHasState.set(teamId, (idHasState.get(teamId) || false) || hasState);
+  idHasCorpus.set(teamId, (idHasCorpus.get(teamId) || false) || hasCorpus);
+  idHasMarymount.set(teamId, (idHasMarymount.get(teamId) || false) || hasMarymount);
+  idHasMaryland.set(teamId, (idHasMaryland.get(teamId) || false) || hasMaryland);
+  idHasUCOrCalifornia.set(teamId, (idHasUCOrCalifornia.get(teamId) || false) || hasUCOrCalifornia);
+  idHasFlorida.set(teamId, (idHasFlorida.get(teamId) || false) || hasFlorida);
   }
 
   for (const g of espnGames) {
