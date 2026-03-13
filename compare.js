@@ -20,7 +20,8 @@
 // - Prevent fuzzy matching between *San Diego* and *UC/California San Diego*
 // - Prevent fuzzy matching between *Loyola Marymount* and *Loyola Maryland*
 // - Prevent fuzzy matching between *Texas A&M* and *Texas A&M Corpus Christi*
-// - Prevent fuzzy matching between plain *Miami* and *Miami Florida*
+// - Prevent fuzzy matching between plain *Miami* and *Miami Florida* on BCM side
+// - Allow ESPN plain *Miami* to resolve to *Miami Florida*
 // - BCM canonical: use "California San Diego" (not "UC San Diego") in cleaning aliases
 
 const ESPN_SCOREBOARD =
@@ -543,9 +544,18 @@ function buildTeamIndexFromEspnGames(espnGames) {
   };
 }
 
-function resolveTeamToId(teamText, teamIndex, strictMode) {
+function resolveTeamToId(teamText, teamIndex, strictMode, source = "other") {
   if (!teamIndex) return null;
   const raw = stripLeadingJunk(teamText);
+  const cleaned = cleanTeamName(raw);
+
+  // Special ESPN-only bridge:
+  // ESPN often shows plain "Miami" for Miami Florida.
+  if (source === "espn" && cleaned === "miami") {
+    for (const [knownName, id] of teamIndex.nameToId.entries()) {
+      if (knownName === "miami florida") return id;
+    }
+  }
 
   // Abbreviation (exact)
   const acronym = raw.replace(/[^A-Za-z]/g, "");
@@ -555,9 +565,18 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
   }
 
   // Name (exact)
-  const cleaned = cleanTeamName(raw);
   const exact = teamIndex.nameToId.get(cleaned);
-  if (exact) return exact;
+  if (exact) {
+    // Prevent BCM/plain input from resolving plain "Miami" to Miami Florida
+    if (
+      source !== "espn" &&
+      cleaned === "miami" &&
+      teamIndex.idHasFlorida?.get(exact)
+    ) {
+      return null;
+    }
+    return exact;
+  }
 
   if (strictMode) return null;
 
@@ -600,10 +619,14 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
     const idUCOrCalifornia = !!teamIndex.idHasUCOrCalifornia?.get(bestId);
     if (cleanedHasUCOrCalifornia !== idUCOrCalifornia) return null;
 
-    // Florida consistency (prevents plain Miami -> Miami Florida)
+    // Florida consistency
     const cleanedHasFlorida = /\bflorida\b/.test(cleaned);
     const idFlorida = !!teamIndex.idHasFlorida?.get(bestId);
-    if (cleanedHasFlorida !== idFlorida) return null;
+
+    // Allow only ESPN plain "Miami" -> Miami Florida
+    if (!(source === "espn" && cleaned === "miami" && idFlorida)) {
+      if (cleanedHasFlorida !== idFlorida) return null;
+    }
 
     return bestId;
   }
@@ -614,14 +637,14 @@ function resolveTeamToId(teamText, teamIndex, strictMode) {
 // --------------------------
 // KEY BUILDERS
 // --------------------------
-function buildIdKeyFromLine(line, teamIndex, strictMode) {
+function buildIdKeyFromLine(line, teamIndex, strictMode, source = "other") {
   const parsed = parseMatchupTeams(line);
   if (!parsed) {
     return { key: null, parseOk: false, reason: "Cannot parse matchup (need 'at' or '@')." };
   }
 
-  const awayId = resolveTeamToId(parsed.awayText, teamIndex, strictMode);
-  const homeId = resolveTeamToId(parsed.homeText, teamIndex, strictMode);
+  const awayId = resolveTeamToId(parsed.awayText, teamIndex, strictMode, source);
+  const homeId = resolveTeamToId(parsed.homeText, teamIndex, strictMode, source);
 
   if (!awayId || !homeId) {
     return {
@@ -737,7 +760,7 @@ function compareAndRender() {
   for (let idx = 0; idx < otherLines.length; idx++) {
     const line = otherLines[idx];
 
-    const idRes = buildIdKeyFromLine(line, lastTeamIndex, strictMode);
+    const idRes = buildIdKeyFromLine(line, lastTeamIndex, strictMode, "other");
     if (idRes.key) {
       if (!otherByIdKey.has(idRes.key)) otherByIdKey.set(idRes.key, []);
       if (otherByIdKey.get(idRes.key).length > 0) dupOtherIdKeys++;
@@ -762,7 +785,7 @@ function compareAndRender() {
   const seenEspnStrKeys = new Set();
 
   for (const espnLine of espnLines) {
-    const idRes = buildIdKeyFromLine(espnLine, lastTeamIndex, strictMode);
+    const idRes = buildIdKeyFromLine(espnLine, lastTeamIndex, strictMode, "espn");
     if (idRes.key) {
       if (seenEspnIdKeys.has(idRes.key)) dupEspnIdKeys++;
       else seenEspnIdKeys.add(idRes.key);
@@ -847,7 +870,7 @@ function compareAndRender() {
 
     // 1) ID key match
     if (idMatchingEnabled) {
-      const idRes = buildIdKeyFromLine(espnLine, lastTeamIndex, strictMode);
+      const idRes = buildIdKeyFromLine(espnLine, lastTeamIndex, strictMode, "espn");
 
       if (!idRes.parseOk) {
         parseErrors.push(`[ESPN][PARSE] ${espnLine} -> ${idRes.reason}`);
