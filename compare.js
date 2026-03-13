@@ -20,8 +20,8 @@
 // - Prevent fuzzy matching between *San Diego* and *UC/California San Diego*
 // - Prevent fuzzy matching between *Loyola Marymount* and *Loyola Maryland*
 // - Prevent fuzzy matching between *Texas A&M* and *Texas A&M Corpus Christi*
-// - Prevent fuzzy matching between plain *Miami* and *Miami Florida* on BCM side
-// - Allow ESPN plain *Miami* to resolve to *Miami Florida*
+// - Prevent plain BCM *Miami* from matching *Miami Florida*
+// - Allow ESPN plain *Miami* to match *Miami Florida*
 // - BCM canonical: use "California San Diego" (not "UC San Diego") in cleaning aliases
 
 const ESPN_SCOREBOARD =
@@ -546,11 +546,13 @@ function buildTeamIndexFromEspnGames(espnGames) {
 
 function resolveTeamToId(teamText, teamIndex, strictMode, source = "other") {
   if (!teamIndex) return null;
+
   const raw = stripLeadingJunk(teamText);
   const cleaned = cleanTeamName(raw);
 
-  // Special ESPN-only bridge:
+  // ESPN-only bridge:
   // ESPN often shows plain "Miami" for Miami Florida.
+  // Allow that ONLY for ESPN-side resolution.
   if (source === "espn" && cleaned === "miami") {
     for (const [knownName, id] of teamIndex.nameToId.entries()) {
       if (knownName === "miami florida") return id;
@@ -594,16 +596,13 @@ function resolveTeamToId(teamText, teamIndex, strictMode, source = "other") {
 
   // Accept fuzzy only above threshold AND only if ambiguity-guards pass
   if (bestId && bestScore >= 0.72) {
-    // Treat both "state" and trailing "st" as "state team"
     const cleanedHasState = /\bstate\b/.test(cleaned) || /\bst\b$/.test(cleaned);
     if (!cleanedHasState && teamIndex.idHasState?.get(bestId)) return null;
 
-    // Corpus consistency
     const cleanedHasCorpus = /\bcorpus\b/.test(cleaned);
     const idCorpus = !!teamIndex.idHasCorpus?.get(bestId);
     if (cleanedHasCorpus !== idCorpus) return null;
 
-    // Loyola Maryland vs Loyola Marymount consistency
     const cleanedHasMarymount = /\bmarymount\b/.test(cleaned);
     const cleanedHasMaryland = /\bmaryland\b/.test(cleaned);
     const idMarymount = !!teamIndex.idHasMarymount?.get(bestId);
@@ -614,12 +613,10 @@ function resolveTeamToId(teamText, teamIndex, strictMode, source = "other") {
       if (cleanedHasMaryland !== idMaryland) return null;
     }
 
-    // UC/California consistency
     const cleanedHasUCOrCalifornia = /\buc\b/.test(cleaned) || /\bcalifornia\b/.test(cleaned);
     const idUCOrCalifornia = !!teamIndex.idHasUCOrCalifornia?.get(bestId);
     if (cleanedHasUCOrCalifornia !== idUCOrCalifornia) return null;
 
-    // Florida consistency
     const cleanedHasFlorida = /\bflorida\b/.test(cleaned);
     const idFlorida = !!teamIndex.idHasFlorida?.get(bestId);
 
@@ -657,16 +654,22 @@ function buildIdKeyFromLine(line, teamIndex, strictMode, source = "other") {
   return { key: `${awayId}|${homeId}`, parseOk: true, reason: null };
 }
 
-function buildStringKeyFromLine(line) {
+function buildStringKeyFromLine(line, source = "other") {
   const parsed = parseMatchupTeams(line);
   if (!parsed) return null;
 
   const awayRaw = stripLeadingJunk(parsed.awayText);
   const homeRaw = stripLeadingJunk(parsed.homeText);
 
-  const away = cleanTeamName(awayRaw);
-  const home = cleanTeamName(homeRaw);
+  let away = cleanTeamName(awayRaw);
+  let home = cleanTeamName(homeRaw);
   if (!away || !home) return null;
+
+  // ESPN-only bridge for plain Miami -> Miami Florida
+  if (source === "espn") {
+    if (away === "miami") away = "miami florida";
+    if (home === "miami") home = "miami florida";
+  }
 
   // Enforce "State/St" consistency in STRING matching too
   const awayHasState = /\bstate\b/i.test(awayRaw) || /\bst\.?\s*$/i.test(awayRaw);
@@ -681,8 +684,10 @@ function buildStringKeyFromLine(line) {
   const awayHasCorpus = corpusRe.test(awayRaw) || tamccRe.test(awayRaw);
   const homeHasCorpus = corpusRe.test(homeRaw) || tamccRe.test(homeRaw);
 
-  const awayHasFlorida = /\bflorida\b/i.test(awayRaw);
-  const homeHasFlorida = /\bflorida\b/i.test(homeRaw);
+  const awayHasFlorida =
+    /\bflorida\b/i.test(awayRaw) || (source === "espn" && cleanTeamName(awayRaw) === "miami");
+  const homeHasFlorida =
+    /\bflorida\b/i.test(homeRaw) || (source === "espn" && cleanTeamName(homeRaw) === "miami");
 
   const awayHasMarymount = /\bmarymount\b/i.test(awayRaw);
   const awayHasMaryland = /\bmaryland\b/i.test(awayRaw);
@@ -768,7 +773,7 @@ function compareAndRender() {
       continue;
     }
 
-    const sk = buildStringKeyFromLine(line);
+    const sk = buildStringKeyFromLine(line, "other");
     if (sk) {
       if (!otherByStrKey.has(sk)) otherByStrKey.set(sk, []);
       if (otherByStrKey.get(sk).length > 0) dupOtherStrKeys++;
@@ -791,7 +796,7 @@ function compareAndRender() {
       else seenEspnIdKeys.add(idRes.key);
       continue;
     }
-    const sk = buildStringKeyFromLine(espnLine);
+    const sk = buildStringKeyFromLine(espnLine, "espn");
     if (sk) {
       if (seenEspnStrKeys.has(sk)) dupEspnStrKeys++;
       else seenEspnStrKeys.add(sk);
@@ -888,7 +893,7 @@ function compareAndRender() {
 
     // 2) String key fallback
     if (!matchedOtherLine) {
-      const sk = buildStringKeyFromLine(espnLine);
+      const sk = buildStringKeyFromLine(espnLine, "espn");
       if (sk && otherByStrKey.has(sk)) {
         const queue = otherByStrKey.get(sk);
         if (queue && queue.length) {
